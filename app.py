@@ -48,6 +48,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@app.get("/health")
+def health():
+    return "ok", 200
+
 
 @app.before_request
 def log_request_info():
@@ -619,18 +623,25 @@ def start_ngrok():
         return
     try:
         print("🚀 Starting ngrok tunnel...")
-        logger.info("Starting ngrok tunnel on port %s", PORT)
-        # Configure ngrok auth token programmatically
+        port = int(os.environ.get("PORT", 10000))
+        logger.info("Starting ngrok tunnel on port %s", port)
+        # Use NGROK_AUTHTOKEN from environment if provided
         try:
             from pyngrok.conf import PyngrokConfig
-            conf = PyngrokConfig(authtoken="36YQTOQsoFIfAQp2dCDNf6RL3ct_7g6Meh82RDiU2V8iYrerS")
-            ngrok_process = ngrok.connect(PORT, "http", pyngrok_config=conf)
+            authtoken = os.environ.get("NGROK_AUTHTOKEN")
+            if authtoken:
+                conf = PyngrokConfig(authtoken=authtoken)
+                ngrok_process = ngrok.connect(port, "http", pyngrok_config=conf)
+            else:
+                ngrok_process = ngrok.connect(port, "http")
         except Exception:
             try:
-                ngrok.set_auth_token("36YQTOQsoFIfAQp2dCDNf6RL3ct_7g6Meh82RDiU2V8iYrerS")
+                authtoken = os.environ.get("NGROK_AUTHTOKEN")
+                if authtoken:
+                    ngrok.set_auth_token(authtoken)
             except Exception:
                 pass
-            ngrok_process = ngrok.connect(PORT, "http")
+            ngrok_process = ngrok.connect(port, "http")
         public_url = ngrok_process.public_url
         print(f"✅ Public URL: {public_url}")
         logger.info("Ngrok public URL: %s", public_url)
@@ -749,13 +760,14 @@ def main():
     """Main function to run the server"""
     print("🎯 PhonePe")
     print("=" * 50)
-    print(f"🌐 Local server: http://localhost:{PORT}")
-    print(f"🧪 Test geolocation: http://localhost:{PORT}/test-external")
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🌐 Local server: http://localhost:{port}")
+    print(f"🧪 Test geolocation: http://localhost:{port}/test-external")
     print(f"📁 Photos will be saved in: {PHOTOS_DIR}/")
     print("=" * 50)
 
-    # Start ngrok in background thread
-    if NGROK_AVAILABLE:
+    # Start ngrok in background thread (local dev only)
+    if NGROK_AVAILABLE and os.environ.get("USE_PYNGROK") == "1":
         ngrok_thread = threading.Thread(target=start_ngrok, daemon=True)
         ngrok_thread.start()
         # Give ngrok time to start
@@ -773,7 +785,8 @@ def main():
 
     try:
         # Run Flask server
-        app.run(host='0.0.0.0', port=PORT, debug=False)
+        port = int(os.environ.get("PORT", 10000))
+        app.run(host='0.0.0.0', port=port, debug=False)
     except KeyboardInterrupt:
         print("\n👋 Shutting down...")
     finally:
