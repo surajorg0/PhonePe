@@ -50,10 +50,10 @@ app = Flask(__name__,
            static_folder='static')
 CORS(app)
 
-# Configure Cloudinary (if credentials are provided in Env Vars)
-CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME')
-CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY')
-CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET')
+# Configure Cloudinary (Settings provided by USER)
+CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME', 'dwalfpsdm')
+CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY', '731735979527842')
+CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET', 'NQgDnfwencceG7QeZxHGxJVl6TM')
 
 if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
     cloudinary.config(
@@ -66,8 +66,8 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
 else:
     logger.warning("⚠️  Cloudinary not configured. Photos will be saved locally (ephemeral).")
 
-# Configure MongoDB (for permanent metadata storage)
-MONGO_URI = os.environ.get('MONGO_URI')
+# Configure MongoDB (Settings provided by USER)
+MONGO_URI = os.environ.get('MONGO_URI', 'mongodb+srv://surajorg48:RkEwKhSN2vKkYuBj@cluster0.afdvgbx.mongodb.net/?appName=Cluster0')
 db = None
 if MONGO_URI:
     try:
