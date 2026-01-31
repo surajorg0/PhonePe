@@ -300,10 +300,15 @@ ngrok_process = None
 
 def get_ip_location(ip_address):
     """Get accurate location information from IP address using ip-api.com"""
+    # Clean up IP address in case it's a list (common on Render/Proxies)
+    if ip_address and ',' in ip_address:
+        ip_address = ip_address.split(',')[0].strip()
+
     if not ip_address or ip_address == 'Unknown' or ip_address.startswith('127.') or ip_address == '::1':
         return 'Local Development / Test'
 
     try:
+        # Connect via HTTPs for better reliability
         response = requests.get(f'http://ip-api.com/json/{ip_address}', timeout=5)
         response.raise_for_status()
         data = response.json()
@@ -682,8 +687,9 @@ def upload_single_photo():
 
         # Determine IP and accurate location
         ip_address = metadata.get('ip', request.remote_addr or 'Unknown')
-        real_ip = request.headers.get('X-Forwarded-For') or request.headers.get('X-Real-IP') or ip_address
-        if real_ip != ip_address:
+        real_ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.headers.get('X-Real-IP') or ip_address
+        if real_ip and real_ip != ip_address and real_ip != 'Unknown':
+            logger.info("📍 Real IP detected: %s", real_ip)
             ip_address = real_ip
         accurate_location = get_ip_location(ip_address)
 

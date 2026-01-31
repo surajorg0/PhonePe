@@ -234,17 +234,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="burst-section">
                         <h4 class="burst-title">${burstName} Burst</h4>
                         <div class="photos-grid">
-                            ${photos.map((p, idx) => `
-                                <div class="photo-item-container">
-                                    <div class="photo-item">
-                                        <img src="${API_BASE_URL}/admin/photo/${session.session_id}/${burstName}/${p}" loading="lazy">
-                                        <div class="overlay">${burstName} #${idx + 1}</div>
+                            ${photos.map((p, idx) => {
+                    // If p is already a full URL (Cloudinary), use it directly. 
+                    // Otherwise, construct the local URL.
+                    const isUrl = p.startsWith('http');
+                    const imgSrc = isUrl ? p : `${API_BASE_URL}/admin/photo/${session.session_id}/${burstName}/${p}`;
+                    const downloadSrc = isUrl ? p : `${API_BASE_URL}/api/photo/download/${session.session_id}/${burstName}/${p}`;
+
+                    return `
+                                    <div class="photo-item-container">
+                                        <div class="photo-item">
+                                            <img src="${imgSrc}" loading="lazy">
+                                            <div class="overlay">${burstName} #${idx + 1}</div>
+                                        </div>
+                                        <a href="${downloadSrc}" class="photo-download-btn" title="Download Photo" target="_blank">
+                                            <i class="fas fa-download"></i>
+                                        </a>
                                     </div>
-                                    <a href="${API_BASE_URL}/api/photo/download/${session.session_id}/${burstName}/${p}" class="photo-download-btn" title="Download Photo">
-                                        <i class="fas fa-download"></i>
-                                    </a>
-                                </div>
-                            `).join('')}
+                                `;
+                }).join('')}
                         </div>
                     </div>
                 `;
