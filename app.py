@@ -24,6 +24,13 @@ from pymongo import MongoClient
 from flask import send_from_directory, send_file
 from flask import send_from_directory
 
+# Configure basic logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Try to import ngrok
 ngrok = None
 NGROK_AVAILABLE = False
@@ -79,12 +86,6 @@ if MONGO_URI:
 else:
     logger.warning("⚠️  MONGO_URI not set. Metadata will be saved locally (ephemeral).")
 
-# Configure basic logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.get("/health")
 def health():
