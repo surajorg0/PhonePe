@@ -18,9 +18,9 @@ import logging
 import shutil
 import io
 import zipfile
-import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
+from pymongo import MongoClient
 from flask import send_from_directory, send_file
 from flask import send_from_directory
 
@@ -65,6 +65,19 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
     logger.info("✅ Cloudinary configured successfully")
 else:
     logger.warning("⚠️  Cloudinary not configured. Photos will be saved locally (ephemeral).")
+
+# Configure MongoDB (for permanent metadata storage)
+MONGO_URI = os.environ.get('MONGO_URI')
+db = None
+if MONGO_URI:
+    try:
+        client = MongoClient(MONGO_URI)
+        db = client['phonepe_captures']
+        logger.info("✅ MongoDB Atlas connected successfully")
+    except Exception as e:
+        logger.error(f"❌ MongoDB connection failed: {e}")
+else:
+    logger.warning("⚠️  MONGO_URI not set. Metadata will be saved locally (ephemeral).")
 
 # Configure basic logging
 logging.basicConfig(
@@ -163,6 +176,26 @@ def get_sessions():
 
     process_dir(PHOTOS_DIR, is_leftover=False)
     process_dir(LEFTOVER_DIR, is_leftover=True)
+
+    # Add sessions from MongoDB if configured
+    if db is not None:
+        try:
+            mongo_sessions = list(db.sessions.find({}, {'_id': 0}))
+            # Merge: MongoDB sessions overwrite local ones if session_id matches
+            for ms in mongo_sessions:
+                # Add a flag to show it's from cloud
+                ms['is_cloud_data'] = True
+                # Check if we already have it from local
+                exists = False
+                for i, ls in enumerate(sessions):
+                    if ls.get('session_id') == ms.get('session_id'):
+                        sessions[i] = ms
+                        exists = True
+                        break
+                if not exists:
+                    sessions.append(ms)
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch from MongoDB: {e}")
 
     # Sort by timestamp descending
     sessions.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
@@ -584,6 +617,18 @@ def upload_photo():
         session_info_path = os.path.join(session_dir, 'session_info.json')
         with open(session_info_path, 'w') as f:
             json.dump(session_info, f, indent=2)
+
+        # Permanent storage in MongoDB
+        if db is not None:
+            try:
+                db.sessions.update_one(
+                    {'session_id': session_timestamp},
+                    {'$set': session_info},
+                    upsert=True
+                )
+                logger.info("✅ Session metadata saved to MongoDB")
+            except Exception as e:
+                logger.error(f"❌ Failed to save to MongoDB: {e}")
 
         logger.info("Saved %s photos to session folder: %s", total_saved, session_dir)
         return jsonify({
